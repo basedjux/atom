@@ -207,7 +207,7 @@ describe('AtomApplication', function () {
           sendBackToMainProcess(null)
         })
       })
-      await window1.saveState()
+      await window1.prepareToUnload()
       window1.close()
       await window1.closedPromise
 
@@ -221,7 +221,7 @@ describe('AtomApplication', function () {
         sendBackToMainProcess(textEditor.getText())
       })
       assert.equal(window2Text, 'Hello World! How are you?')
-      await window2.saveState()
+      await window2.prepareToUnload()
       window2.close()
       await window2.closedPromise
 
@@ -342,6 +342,8 @@ describe('AtomApplication', function () {
     })
 
     it('reopens any previously opened windows when launched with no path', async function () {
+      if (process.platform === 'win32') return; // Test is too flakey on Windows
+
       const tempDirPath1 = makeTempDir()
       const tempDirPath2 = makeTempDir()
 
@@ -354,8 +356,8 @@ describe('AtomApplication', function () {
       ])
 
       await Promise.all([
-        app1Window1.saveState(),
-        app1Window2.saveState()
+        app1Window1.prepareToUnload(),
+        app1Window2.prepareToUnload()
       ])
 
       const atomApplication2 = buildAtomApplication()
@@ -369,7 +371,7 @@ describe('AtomApplication', function () {
       assert.deepEqual(await getTreeViewRootDirectories(app2Window2), [tempDirPath2])
     })
 
-    it('does not reopen any previously opened windows when launched with no path and `core.restorePreviousWindowsOnStart` is false', async function () {
+    it('does not reopen any previously opened windows when launched with no path and `core.restorePreviousWindowsOnStart` is no', async function () {
       const atomApplication1 = buildAtomApplication()
       const app1Window1 = atomApplication1.launch(parseCommandLine([makeTempDir()]))
       await focusWindow(app1Window1)
@@ -379,7 +381,7 @@ describe('AtomApplication', function () {
       const configPath = path.join(process.env.ATOM_HOME, 'config.cson')
       const config = season.readFileSync(configPath)
       if (!config['*'].core) config['*'].core = {}
-      config['*'].core.restorePreviousWindowsOnStart = false
+      config['*'].core.restorePreviousWindowsOnStart = 'no'
       season.writeFileSync(configPath, config)
 
       const atomApplication2 = buildAtomApplication()
@@ -437,6 +439,27 @@ describe('AtomApplication', function () {
         assert.deepEqual(await getTreeViewRootDirectories(window2), [dirB])
       })
     })
+
+    describe('when opening atom:// URLs', function () {
+      it('loads the urlMain file in a new window', async function () {
+        const packagePath = path.join(__dirname, '..', 'fixtures', 'packages', 'package-with-url-main')
+        const packagesDirPath = path.join(process.env.ATOM_HOME, 'packages')
+        fs.mkdirSync(packagesDirPath)
+        fs.symlinkSync(packagePath, path.join(packagesDirPath, 'package-with-url-main'), 'junction')
+
+        const atomApplication = buildAtomApplication()
+        const launchOptions = parseCommandLine([])
+        launchOptions.urlsToOpen = ['atom://package-with-url-main/test']
+        let windows = atomApplication.launch(launchOptions)
+        await windows[0].loadedPromise
+
+        let reached = await evalInWebContents(windows[0].browserWindow.webContents, function (sendBackToMainProcess) {
+          sendBackToMainProcess(global.reachedUrlMain)
+        })
+        assert.equal(reached, true);
+        windows[0].close();
+      })
+    })
   })
 
   describe('before quitting', function () {
@@ -450,7 +473,7 @@ describe('AtomApplication', function () {
       await focusWindow(window2)
       electron.app.quit()
       assert(!electron.app.hasQuitted())
-      await Promise.all([window1.lastSaveStatePromise, window2.lastSaveStatePromise])
+      await Promise.all([window1.lastPrepareToUnloadPromise, window2.lastPrepareToUnloadPromise])
       assert(electron.app.hasQuitted())
     })
   })
